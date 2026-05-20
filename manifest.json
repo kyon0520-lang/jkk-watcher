@@ -2,7 +2,7 @@
   "name": "JKK速報 - 空室リアルタイム通知",
   "short_name": "JKK速報",
   "description": "東京都住宅供給公社（JKK）の空室情報をリアルタイムで通知",
-  "start_url": "/",
+  "start_url": "/jkk-watcher/",
   "display": "standalone",
   "background_color": "#667eea",
   "theme_color": "#667eea",
