@@ -1,4 +1,6 @@
-// アプリの状態管理
+const SERVER_URL = 'https://jkk-server.onrender.com';
+const VAPID_PUBLIC_KEY = 'BAd096iDmIS3vOKee-wVqysH5F2YGqY7OsAqEKtxPbZDbMfmNKwxw0xZ1s6zgePtL1IDhWvryMpugudtp-ZNiDA';
+
 let state = {
     notificationsEnabled: false,
     properties: [],
@@ -6,20 +8,15 @@ let state = {
     filters: ['全エリア', '23区', '多摩地域', '港区', '新宿区', '渋谷区'],
     activeFilter: '全エリア',
     activeTab: 'home',
-    lastCheck: null
+    notifyFilters: JSON.parse(localStorage.getItem('notifyFilters') || '[]'),
 };
 
-const SERVER_URL = 'https://jkk-server.onrender.com';
-const VAPID_PUBLIC_KEY = 'BAd096iDmIS3vOKee-wVqysH5F2YGqY7OsAqEKtxPbZDbMfmNKwxw0xZ1s6zgePtL1IDhWvryMpugudtp-ZNiDA';
-
-// Service Worker登録
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js')
         .then(reg => console.log('Service Worker登録成功', reg))
         .catch(err => console.error('Service Worker登録失敗', err));
 }
 
-// PWAインストールプロンプト
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
@@ -30,7 +27,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
 function installApp() {
     if (deferredPrompt) {
         deferredPrompt.prompt();
-        deferredPrompt.userChoice.then((choiceResult) => {
+        deferredPrompt.userChoice.then(() => {
             deferredPrompt = null;
             document.getElementById('installPrompt').style.display = 'none';
         });
@@ -39,28 +36,21 @@ function installApp() {
 
 function dismissInstall() {
     document.getElementById('installPrompt').style.display = 'none';
-    localStorage.setItem('installDismissed', 'true');
 }
 
-// 通知許可のリクエスト
 async function toggleNotifications() {
     const btn = document.getElementById('notificationBtn');
-
     if (!state.notificationsEnabled) {
         if (!('Notification' in window)) {
             alert('このブラウザは通知に対応していません');
             return;
         }
-
         const permission = await Notification.requestPermission();
-
         if (permission === 'granted') {
             state.notificationsEnabled = true;
             btn.classList.remove('disabled');
             updateStatusBanner('リアルタイム監視中 - 新着物件を自動チェック', 'success');
             await subscribeToPush();
-        } else {
-            alert('通知を有効にするには、ブラウザの設定で通知を許可してください');
         }
     } else {
         state.notificationsEnabled = false;
@@ -69,36 +59,50 @@ async function toggleNotifications() {
     }
 }
 
-// プッシュ通知のサブスクリプション
 async function subscribeToPush() {
     try {
         const registration = await navigator.serviceWorker.ready;
-
         const subscription = await registration.pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
         });
-
-        // サーバーにサブスクリプション情報を送信
         await fetch(`${SERVER_URL}/api/subscribe`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(subscription)
+            body: JSON.stringify({
+                subscription,
+                filters: state.notifyFilters
+            })
         });
-
-        console.log('サーバーにサブスクリプション登録完了！');
-
+        console.log('サーバーにサブスクリプション登録完了！フィルター:', state.notifyFilters);
     } catch (error) {
         console.error('プッシュ通知サブスクリプション失敗:', error);
     }
 }
 
-// Base64変換ユーティリティ
+async function updateFiltersOnServer() {
+    try {
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.getSubscription();
+        if (subscription) {
+            await fetch(`${SERVER_URL}/api/subscribe`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    subscription,
+                    filters: state.notifyFilters
+                })
+            });
+            console.log('フィルター更新完了:', state.notifyFilters);
+        }
+    } catch (error) {
+        console.error('フィルター更新失敗:', error);
+    }
+}
+
 function urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
-    const base64 = (base64String + padding)
-        .replace(/\-/g, '+')
-        .replace(/_/g, '/');
+    const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
     const rawData = window.atob(base64);
     const outputArray = new Uint8Array(rawData.length);
     for (let i = 0; i < rawData.length; ++i) {
@@ -107,7 +111,6 @@ function urlBase64ToUint8Array(base64String) {
     return outputArray;
 }
 
-// ステータスバナー更新
 function updateStatusBanner(message, type) {
     const banner = document.getElementById('statusBanner');
     banner.style.display = 'flex';
@@ -120,7 +123,6 @@ function updateStatusBanner(message, type) {
     `;
 }
 
-// フィルターボタン初期化
 function initFilters() {
     const container = document.getElementById('filterButtons');
     container.innerHTML = state.filters.map(filter => `
@@ -137,16 +139,12 @@ function setFilter(filter) {
     renderProperties();
 }
 
-// サーバーから物件データを取得
 async function loadPropertiesFromServer() {
     try {
         const response = await fetch(`${SERVER_URL}/api/properties`);
         const data = await response.json();
         if (data.success) {
-            state.properties = data.properties.map(p => ({
-                ...p,
-                postedAt: new Date(p.foundAt)
-            }));
+            state.properties = data.properties;
             renderProperties();
         }
     } catch (error) {
@@ -154,25 +152,21 @@ async function loadPropertiesFromServer() {
     }
 }
 
-// 経過時間のフォーマット
 function formatTimeAgo(date) {
     const now = new Date();
     const diffMs = now - new Date(date);
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
-
     if (diffMins < 1) return 'たった今';
     if (diffMins < 60) return `${diffMins}分前`;
     if (diffHours < 24) return `${diffHours}時間前`;
     return `${diffDays}日前`;
 }
 
-// 物件リストのレンダリング
 function renderProperties() {
     const container = document.getElementById('propertyList');
     let filteredProperties = state.properties;
-
     if (state.activeFilter !== '全エリア') {
         filteredProperties = state.properties.filter(p => {
             if (state.activeFilter === '23区') {
@@ -181,15 +175,12 @@ function renderProperties() {
             return p.address?.includes(state.activeFilter);
         });
     }
-
     if (filteredProperties.length === 0) {
         container.innerHTML = '<div class="loading">物件が見つかりませんでした</div>';
         return;
     }
-
     container.innerHTML = filteredProperties.map(property => `
-        <div class="property-card ${property.isNew ? 'new' : ''}">
-            ${property.isNew ? '<div class="new-badge">NEW</div>' : ''}
+        <div class="property-card">
             <div class="property-header">
                 <div class="property-info">
                     <div class="property-name">${property.name}</div>
@@ -223,7 +214,6 @@ function renderProperties() {
     `).join('');
 }
 
-// お気に入りトグル
 function toggleFavorite(id) {
     if (state.favorites.includes(id)) {
         state.favorites = state.favorites.filter(fav => fav !== id);
@@ -234,19 +224,72 @@ function toggleFavorite(id) {
     renderProperties();
 }
 
-// タブ切り替え
+function renderSettings() {
+    const container = document.getElementById('propertyList');
+    container.innerHTML = `
+        <div class="property-card">
+            <h3 style="margin-bottom:15px;font-size:18px;font-weight:700;">🔔 通知フィルター設定</h3>
+            <p style="color:#666;font-size:14px;margin-bottom:15px;">
+                通知したい物件名を入力してください。<br>
+                空欄の場合は全ての新着物件を通知します。
+            </p>
+            <div style="display:flex;gap:10px;margin-bottom:15px;">
+                <input id="filterInput" type="text" placeholder="物件名を入力（例：落合）"
+                    style="flex:1;padding:10px;border-radius:10px;border:2px solid #eee;font-size:14px;">
+                <button onclick="addNotifyFilter()"
+                    style="background:linear-gradient(135deg,#667eea,#764ba2);color:white;border:none;padding:10px 20px;border-radius:10px;font-size:14px;cursor:pointer;">
+                    追加
+                </button>
+            </div>
+            <div id="filterList">
+                ${renderFilterList()}
+            </div>
+        </div>
+    `;
+}
+
+function renderFilterList() {
+    if (state.notifyFilters.length === 0) {
+        return '<p style="color:#999;font-size:14px;">フィルターなし（全物件を通知）</p>';
+    }
+    return state.notifyFilters.map(f => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:#f5f5f5;border-radius:10px;margin-bottom:8px;">
+            <span style="font-size:14px;font-weight:600;">${f}</span>
+            <button onclick="removeNotifyFilter('${f}')"
+                style="background:#f5576c;color:white;border:none;padding:5px 10px;border-radius:8px;font-size:12px;cursor:pointer;">
+                削除
+            </button>
+        </div>
+    `).join('');
+}
+
+function addNotifyFilter() {
+    const input = document.getElementById('filterInput');
+    const value = input.value.trim();
+    if (value && !state.notifyFilters.includes(value)) {
+        state.notifyFilters.push(value);
+        localStorage.setItem('notifyFilters', JSON.stringify(state.notifyFilters));
+        input.value = '';
+        document.getElementById('filterList').innerHTML = renderFilterList();
+        updateFiltersOnServer();
+    }
+}
+
+function removeNotifyFilter(filter) {
+    state.notifyFilters = state.notifyFilters.filter(f => f !== filter);
+    localStorage.setItem('notifyFilters', JSON.stringify(state.notifyFilters));
+    document.getElementById('filterList').innerHTML = renderFilterList();
+    updateFiltersOnServer();
+}
+
 function switchTab(tab) {
     state.activeTab = tab;
     const buttons = document.querySelectorAll('.nav-btn');
     buttons.forEach((btn, index) => {
         const tabs = ['home', 'search', 'favorites', 'settings'];
-        if (tabs[index] === tab) {
-            btn.classList.add('active');
-        } else {
-            btn.classList.remove('active');
-        }
+        if (tabs[index] === tab) btn.classList.add('active');
+        else btn.classList.remove('active');
     });
-
     if (tab === 'favorites') {
         const favoriteProperties = state.properties.filter(p => state.favorites.includes(p.id));
         const container = document.getElementById('propertyList');
@@ -260,28 +303,25 @@ function switchTab(tab) {
         }
     } else if (tab === 'home') {
         loadPropertiesFromServer();
+    } else if (tab === 'settings') {
+        renderSettings();
     }
 }
 
-// 初期化
 document.addEventListener('DOMContentLoaded', () => {
     initFilters();
     loadPropertiesFromServer();
-
     if (window.matchMedia('(display-mode: standalone)').matches) {
         document.getElementById('installPrompt').style.display = 'none';
     }
-
     const notificationBtn = document.getElementById('notificationBtn');
     if (Notification.permission === 'granted') {
         notificationBtn.classList.remove('disabled');
         state.notificationsEnabled = true;
+        updateStatusBanner('リアルタイム監視中 - 新着物件を自動チェック', 'success');
     } else {
         notificationBtn.classList.add('disabled');
+        updateStatusBanner('通知をオンにすると新着物件を即座にお知らせします', 'warning');
     }
-
-    updateStatusBanner('通知をオンにすると新着物件を即座にお知らせします', 'warning');
-
-    // 5分ごとにサーバーからデータを更新
     setInterval(loadPropertiesFromServer, 5 * 60 * 1000);
 });
