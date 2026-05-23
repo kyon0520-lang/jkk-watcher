@@ -1,10 +1,6 @@
 const CACHE_NAME = 'jkk-watcher-v1';
-const urlsToCache = [
-  '/',
-  '/index.html',
-  '/app.js',
-  '/manifest.json'
-];
+const urlsToCache = [];
+
 // インストール時
 self.addEventListener('install', event => {
   event.waitUntil(
