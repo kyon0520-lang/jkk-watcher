@@ -50,11 +50,11 @@ jobs:
       - name: Apply
         run: |
           ACTION="${{ steps.decide.outputs.action }}"
-          IDS=$(fly machine list -a "$FLY_APP" --json | jq -r '.[].id')
+          IDS=$(flyctl machine list -a "$FLY_APP" --json | jq -r '.[].id')
           if [ -z "$IDS" ]; then echo "machine not found"; exit 1; fi
           for id in $IDS; do
-            echo ">> fly machine $ACTION $id"
-            fly machine "$ACTION" "$id" -a "$FLY_APP" || echo "(既に$ACTION状態か、エラー)"
+            echo ">> flyctl machine $ACTION $id"
+            flyctl machine "$ACTION" "$id" -a "$FLY_APP" || echo "(既に$ACTION状態か、エラー)"
           done
           echo "--- 現在の状態 ---"
-          fly machine list -a "$FLY_APP"
+          flyctl machine list -a "$FLY_APP"
