@@ -1,0 +1,11 @@
+{
+  "name": "jkk-watcher",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "watch": "node watcher.js"
+  },
+  "dependencies": {
+    "puppeteer": "^25.1.0"
+  }
+}

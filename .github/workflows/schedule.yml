@@ -1,0 +1,60 @@
+name: JKK monitor schedule
+
+# Flyマシンを稼働時間帯だけ起動/停止してコストを抑える。
+# 監視時間帯: 月〜土 7:15〜20:30 (JST)。日曜は終日停止。
+# ※GitHubのcronはUTC。JST = UTC+9。
+#   START 07:15 JST = 22:15 UTC (前日)  → 曜日は UTC日-1 なので Sun-Fri (0-5)
+#   STOP  20:30 JST = 11:30 UTC (当日)  → Mon-Sat (1-6)
+# ※scheduleは混雑時に数分〜十数分遅れることがある（仕様）。窓は余裕をもって設定。
+
+on:
+  schedule:
+    - cron: '15 22 * * 0-5'   # START: 07:15 JST Mon-Sat
+    - cron: '30 11 * * 1-6'   # STOP:  20:30 JST Mon-Sat
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'start または stop（手動実行・テスト用）'
+        required: true
+        type: choice
+        options: [start, stop]
+        default: start
+
+concurrency:
+  group: jkk-schedule
+  cancel-in-progress: false
+
+jobs:
+  toggle:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: jkk-watcher-kyoji
+    steps:
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Decide action
+        id: decide
+        run: |
+          if [ -n "${{ github.event.inputs.action }}" ]; then
+            ACTION="${{ github.event.inputs.action }}"
+          elif [ "${{ github.event.schedule }}" = "15 22 * * 0-5" ]; then
+            ACTION="start"
+          else
+            ACTION="stop"
+          fi
+          echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+          echo "Resolved action: $ACTION (event=${{ github.event_name }} schedule='${{ github.event.schedule }}')"
+
+      - name: Apply
+        run: |
+          ACTION="${{ steps.decide.outputs.action }}"
+          IDS=$(fly machine list -a "$FLY_APP" --json | jq -r '.[].id')
+          if [ -z "$IDS" ]; then echo "machine not found"; exit 1; fi
+          for id in $IDS; do
+            echo ">> fly machine $ACTION $id"
+            fly machine "$ACTION" "$id" -a "$FLY_APP" || echo "(既に$ACTION状態か、エラー)"
+          done
+          echo "--- 現在の状態 ---"
+          fly machine list -a "$FLY_APP"

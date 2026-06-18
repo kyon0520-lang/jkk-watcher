@@ -1,0 +1,12 @@
+node_modules
+.env
+*.log
+seen_properties.json
+.git
+index.html
+app.js
+sw.js
+manifest.json
+icon*.png
+icon.svg
+README.md

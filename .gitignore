@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.log
+seen_properties.json
+last_snapshot.json
+heartbeat.json
+experiment.js
+local-test.js
