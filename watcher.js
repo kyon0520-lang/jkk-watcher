@@ -143,7 +143,22 @@ function saveSnapshot(ids) {
 function jstDateStr() {
   return new Date().toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' });
 }
+// 稼働窓（月〜土 7:15〜20:30 JST）の内側かどうか。
+// スケジューラ（GitHub Actions）の停止が欠落してマシンが夜通し動くと、
+// 日付が変わった0時ちょうどに「本日の監視を開始しました」が飛んでしまうため、
+// 窓の外では見張り通知を出さない。
+function inJstWindow() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tokyo', hourCycle: 'h23',
+    weekday: 'short', hour: '2-digit', minute: '2-digit'
+  }).formatToParts(new Date());
+  const get = (t) => (parts.find(x => x.type === t) || {}).value;
+  if (get('weekday') === 'Sun') return false;              // 日曜は終日対象外
+  const now = parseInt(get('hour'), 10) * 60 + parseInt(get('minute'), 10);
+  return now >= 7 * 60 + 15 && now < 20 * 60 + 30;
+}
 async function maybeHeartbeat() {
+  if (!inJstWindow()) return;   // 窓外（夜間・日曜）では送らない
   const today = jstDateStr();
   let last = null;
   try { if (fs.existsSync(HEARTBEAT_FILE)) last = fs.readFileSync(HEARTBEAT_FILE, 'utf8').trim(); } catch (e) {}

@@ -2,23 +2,30 @@ name: JKK monitor schedule
 
 # Flyマシンを稼働時間帯だけ起動/停止してコストを抑える。
 # 監視時間帯: 月〜土 7:15〜20:30 (JST)。日曜は終日停止。
-# ※GitHubのcronはUTC。JST = UTC+9。
-#   START 07:15 JST = 22:15 UTC (前日)  → 曜日は UTC日-1 なので Sun-Fri (0-5)
-#   STOP  20:30 JST = 11:30 UTC (当日)  → Mon-Sat (1-6)
-# ※scheduleは混雑時に数分〜十数分遅れることがある（仕様）。窓は余裕をもって設定。
+#
+# 【設計方針】GitHubのscheduleは混雑時に数時間遅れたり、実行自体が欠落することがある
+# （2026-08-27: STARTが5時間遅れ、STOPは未実行のまま夜通し稼働した）。
+# そのため「どのcronが発火したか」ではなく「実行時点のJST時刻」で
+# あるべき状態を判断し、収束させる。どのcronが遅れても・欠けても、
+# 次のcronが正しい状態へ戻す。
 
 on:
   schedule:
-    - cron: '15 22 * * 0-5'   # START: 07:15 JST Mon-Sat
-    - cron: '30 11 * * 1-6'   # STOP:  20:30 JST Mon-Sat
+    # ※UTC表記。JST = UTC+9
+    - cron: '15 22 * * 0-5'   # 07:15 JST 起動
+    - cron: '45 22 * * 0-5'   # 07:45 JST 起動の取りこぼし対策
+    - cron: '0  1  * * 1-6'   # 10:00 JST 午前の復旧用（朝の起動が欠落した場合）
+    - cron: '30 11 * * 1-6'   # 20:30 JST 停止
+    - cron: '30 12 * * 1-6'   # 21:30 JST 停止の取りこぼし対策
+    - cron: '0  15 * * *'     # 00:00 JST 夜間の最終防波堤（必ず停止側になる）
   workflow_dispatch:
     inputs:
       action:
-        description: 'start または stop（手動実行・テスト用）'
-        required: true
+        description: 'auto=時刻で自動判定 / start / stop'
+        required: false
         type: choice
-        options: [start, stop]
-        default: start
+        options: [auto, start, stop]
+        default: auto
 
 concurrency:
   group: jkk-schedule
@@ -36,19 +43,35 @@ jobs:
 
       - name: Decide action
         id: decide
+        env:
+          INPUT_ACTION: ${{ github.event.inputs.action }}
         run: |
-          if [ -n "${{ github.event.inputs.action }}" ]; then
-            ACTION="${{ github.event.inputs.action }}"
-          elif [ "${{ github.event.schedule }}" = "15 22 * * 0-5" ]; then
-            ACTION="start"
+          set -euo pipefail
+          # 稼働窓: 月〜土(JST) の 07:15〜20:30
+          WIN_START=$((7 * 60 + 15))
+          WIN_END=$((20 * 60 + 30))
+          DOW=$(TZ=Asia/Tokyo date +%u)          # 1=月 ... 7=日
+          HH=$(TZ=Asia/Tokyo date +%H)
+          MM=$(TZ=Asia/Tokyo date +%M)
+          NOW=$((10#$HH * 60 + 10#$MM))
+
+          if [ "$DOW" -le 6 ] && [ "$NOW" -ge "$WIN_START" ] && [ "$NOW" -lt "$WIN_END" ]; then
+            AUTO=start
           else
-            ACTION="stop"
+            AUTO=stop
           fi
+
+          ACTION="${INPUT_ACTION:-auto}"
+          if [ "$ACTION" = "auto" ] || [ -z "$ACTION" ]; then
+            ACTION="$AUTO"
+          fi
+
           echo "action=$ACTION" >> "$GITHUB_OUTPUT"
-          echo "Resolved action: $ACTION (event=${{ github.event_name }} schedule='${{ github.event.schedule }}')"
+          echo "JST $(TZ=Asia/Tokyo date '+%m/%d %H:%M (%a)') / 窓内判定=$AUTO / 実行=$ACTION"
 
       - name: Apply
         run: |
+          set -euo pipefail
           ACTION="${{ steps.decide.outputs.action }}"
           IDS=$(flyctl machine list -a "$FLY_APP" --json | jq -r '.[].id')
           if [ -z "$IDS" ]; then echo "machine not found"; exit 1; fi
